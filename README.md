@@ -1,2 +1,1 @@
-zynq_fir_filter_example
-=======================
+Example code that configures and utilizes a fixed point FIR filter in the programmable logic of a Xilinx Zynq FPGA. This code is used in conjunction with Moritz Fischer's Zynq ACP Linux kernel driver and the example FIR filter Xilinx FPGA code.
