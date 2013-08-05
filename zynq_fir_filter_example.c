@@ -95,7 +95,7 @@ int main()
     long long int *samples;
     unsigned long int samples_length;
     unsigned long int number_of_samples;
-    unsigned long long coefficients[10];
+    unsigned long long coefficients[11];
     int num_errors = 0;
     int num_iterations = 0;
     int i = 0;
