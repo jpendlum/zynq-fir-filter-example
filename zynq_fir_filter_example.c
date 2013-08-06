@@ -176,14 +176,19 @@ int main()
     // the physical address + size to the control register FIFOs.
     control_regs[OFFSET_FIR_RELOAD+FIFO_WR_ADDR] = phys_addr;
     control_regs[OFFSET_FIR_RELOAD+FIFO_WR_SIZE] = 11 * sizeof(long long int);
-    // The read command blocks until the an interrupt from the FPGA signals the task is finished
+    // The read command blocks until an interrupt from the FPGA signals that the transfer is finished
     read(fd,0,0);
     // Set config word to load new coefficient. In this case, the generated FIR
     samples[11] = 0;
     // Commit coefficients
     control_regs[OFFSET_FIR_CONFIG+FIFO_WR_ADDR] = phys_addr + 11 * sizeof(long long int);
     control_regs[OFFSET_FIR_CONFIG+FIFO_WR_SIZE] = 1 * sizeof(long long int);
-    read(fd,0,0);
+    // BUG: The read below causes the program to freeze. The freeze occurs due to the kernel driver 
+    //      waiting for an interrupt that never comes (or possibly comes early) after calling 
+    //      wait_event_interruptible() in the read() handler. This problem does not occur with the
+    //      other read calls in this program, so perhaps it has to do with fact that this AXI
+    //      transfer is only one 64-bit message long?
+    // read(fd,0,0);
 
     // Write impulse. Use a larger impulse to counteract the LSB truncation in the FIR filter.
     samples[0] = 1 << 5;
@@ -250,7 +255,12 @@ int main()
         samples[11] = 0;
         control_regs[OFFSET_FIR_CONFIG+FIFO_WR_ADDR] = phys_addr + 11 * sizeof(long long int);
         control_regs[OFFSET_FIR_CONFIG+FIFO_WR_SIZE] = 1 * sizeof(long long int);
-        read(fd,0,0);
+	// BUG: The read below causes the program to freeze. The freeze occurs due to the kernel driver 
+	//      waiting for an interrupt that never comes (or possibly comes early) after calling 
+	//      wait_event_interruptible() in the read() handler. This problem does not occur with the
+	//      other read calls in this program, so perhaps it has to do with fact that this AXI
+	//      transfer is only one 64-bit message long?
+	// read(fd,0,0);
 
         // Send impulse
         samples[0] = 1 << 5;
