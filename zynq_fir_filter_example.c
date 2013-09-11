@@ -57,8 +57,7 @@
 #define OFFSET_H2S          (0)
 #define OFFSET_S2H          (1 << 10)
 #define OFFSET_GLOBAL       (1 << 11)
-#define OFFSET_FIR_CONFIG   (1*8) + OFFSET_H2S
-#define OFFSET_FIR_RELOAD   (2*8) + OFFSET_H2S
+#define OFFSET_FIR_RELOAD   (1*8) + OFFSET_H2S
 
 #define FIFO_WR_CLEAR       0
 #define FIFO_WR_ADDR        1
@@ -95,7 +94,7 @@ int main()
     long long int *samples;
     unsigned long int samples_length;
     unsigned long int number_of_samples;
-    unsigned long long coefficients[11];
+    long long int coefficients[16];
     int num_errors = 0;
     int num_iterations = 0;
     int i = 0;
@@ -151,21 +150,30 @@ int main()
     printf("Address FIFO Word Count: \t%d\n",control_regs[FIFO_RD_ADDR_CNT]);
     printf("Size FIFO Word Count: \t\t%d\n",control_regs[FIFO_RD_SIZE_CNT]);
 
-    // Set new coefficients for 21-tap _symmetric_ FIR filter.
-    coefficients[0] = 6;     // b_0 & b_20
-    coefficients[1] = 0;     // b_1 & b_19
-    coefficients[2] = -4;    // b_2 & b_18
-    coefficients[3] = -3;    // b_3 & b_17
-    coefficients[4] = 5;     // b_4 & b_16
-    coefficients[5] = 6;     // b_5 & b_15
-    coefficients[6] = -6;    // b_6 & b_14
-    coefficients[7] = -13;   // b_7 & b_13
-    coefficients[8] = 7;     // b_8 & b_12
-    coefficients[9] = 44;    // b_9 & b_11
-    coefficients[10] = 64;   // b_10
-    for (i = 0; i < 11; i++)
+    // Set new coefficients for 31-tap _symmetric_ FIR filter.
+    coefficients[0] = -51;   // b_0 & b_30
+    coefficients[1] = -662;  // b_1 & b_29
+    coefficients[2] = -190;  // b_2 & b_28
+    coefficients[3] = 510;   // b_3 & b_27
+    coefficients[4] = 12;    // b_4 & b_26
+    coefficients[5] = -719;  // b_5 & b_25
+    coefficients[6] = 238;   // b_6 & b_24
+    coefficients[7] = 945;   // b_7 & b_23
+    coefficients[8] = -671;  // b_8 & b_22
+    coefficients[9] = -1161; // b_9 & b_21
+    coefficients[10] = 1438;  // b_10 & b_20
+    coefficients[11] = 1341;  // b_11 & b_19
+    coefficients[12] = -3060; // b_12 & b_18
+    coefficients[13] = -1460; // b_13 & b_17
+    coefficients[14] = 10287; // b_14 & b_16
+    coefficients[15] = 17886; // b_15
+
+    for (i = 0; i < 16; i++)
     {
-        samples[i] = coefficients[i];
+        // The coefficients are fixed point fx1.31 and the filter input samples are 32 bit integers.
+        // By left shifting the coefficients and applying a sufficiently large impulse, the impulse
+        // response of the filter will simply be the filter coefficients making verification easy.
+        samples[i] = coefficients[i] << 15;
     }
     // Note: In general it is better to setup the write address before the read address. If the
     //       accelerator has to wait to write data and does not have sufficient internal buffering,
@@ -175,23 +183,13 @@ int main()
     // Load new coefficients by setting the stream to 2 (see OFFSET_FIR_RELOAD) and writing
     // the physical address + size to the control register FIFOs.
     control_regs[OFFSET_FIR_RELOAD+FIFO_WR_ADDR] = phys_addr;
-    control_regs[OFFSET_FIR_RELOAD+FIFO_WR_SIZE] = 11 * sizeof(long long int);
-    // The read command blocks until an interrupt from the FPGA signals that the transfer is finished
+    control_regs[OFFSET_FIR_RELOAD+FIFO_WR_SIZE] = 16 * sizeof(long long int);
+    // Wait for interrupt from the FPGA indicating the coefficients were loaded
     read(fd,0,0);
-    // Set config word to load new coefficient. In this case, the generated FIR
-    samples[11] = 0;
-    // Commit coefficients
-    control_regs[OFFSET_FIR_CONFIG+FIFO_WR_ADDR] = phys_addr + 11 * sizeof(long long int);
-    control_regs[OFFSET_FIR_CONFIG+FIFO_WR_SIZE] = 1 * sizeof(long long int);
-    // BUG: The read below causes the program to freeze. The freeze occurs due to the kernel driver 
-    //      waiting for an interrupt that never comes (or possibly comes early) after calling 
-    //      wait_event_interruptible() in the read() handler. This problem does not occur with the
-    //      other read calls in this program, so perhaps it has to do with fact that this AXI
-    //      transfer is only one 64-bit message long?
-    // read(fd,0,0);
 
-    // Write impulse. Use a larger impulse to counteract the LSB truncation in the FIR filter.
-    samples[0] = 1 << 5;
+    // Write impulse. Use a large impulse to coax the filter's impulse response to be
+    // the filter coefficients
+    samples[0] = 1 << 16;
     for (i = 1; i < 32; i++)
     {
         samples[i] = 0;
@@ -201,30 +199,30 @@ int main()
     control_regs[OFFSET_S2H+FIFO_WR_ADDR] = phys_addr + number_of_samples;
     // Set the number of bytes to write
     control_regs[OFFSET_S2H+FIFO_WR_SIZE] = number_of_samples;
-    read(fd,0,0);
     // Set the read address
     control_regs[OFFSET_H2S+FIFO_WR_ADDR] = phys_addr;
     // Set the number of bytes to read
     control_regs[OFFSET_H2S+FIFO_WR_SIZE] = number_of_samples;
+    // Wait for interrupt from the FPGA indicating the transfer is complete
     read(fd,0,0);
 
     // Read all status FIFOs. If not, the status FIFOs will fill and eventually cause
     // the AXI datamover in the FPGA to ignore further requests.
     control_regs[OFFSET_H2S+FIFO_WR_STS_RDY] = 0;
     control_regs[OFFSET_S2H+FIFO_WR_STS_RDY] = 0;
-    control_regs[OFFSET_FIR_CONFIG+FIFO_WR_STS_RDY] = 0;
     control_regs[OFFSET_FIR_RELOAD+FIFO_WR_STS_RDY] = 0;
 
     // Read result. Should be the FIR impulse response, which is simply coefficents set earlier.
     printf("\n");
     printf("---- Impulse response ----\n");
-    for (i = 32; i < 42; i++)
+    // Since we only store half the coefficients (the filter is symmetric), these for loops look a little funny
+    for (i = 32; i < 48; i++)
     {
-        printf("samples[%2d]: %3lld\t\tExpected: %3lld\n",i,samples[i],coefficients[i-32]);
+        printf("samples[%2d]: %5ld\t\tExpected: %5lld\n",i,(long int)samples[i],coefficients[i-32]);
     }
-    for (i = 42; i < 53; i++)
+    for (i = 48; i < 63; i++)
     {
-        printf("samples[%2d]: %3lld\t\tExpected: %3lld\n",i,samples[i],coefficients[42-i+10]);
+        printf("samples[%2d]: %5ld\t\tExpected: %5lld\n",i,(long int)samples[i],coefficients[62-i]);
     }
 
     printf("\n");
@@ -239,31 +237,22 @@ int main()
     srand (time(NULL));
     while (kill_prog == 0)
     {
-        for (i = 0; i < 11; i++)
+        for (i = 0; i < 16; i++)
         {
-            // Clear lower 5 bits due to LSB truncation in FIR filter
-            coefficients[i] = (long long int)((rand() & 0x000000FF) << 5);
+            // Make 16-bit random coefficients
+            coefficients[i] = (long long int)(rand() >> 16);
         }
-        for (i = 0; i < 11; i++)
+        for (i = 0; i < 16; i++)
         {
-            samples[i] = coefficients[i];
+            samples[i] = ((int)coefficients[i]) << 15;
         }
         // Set coefficients
         control_regs[OFFSET_FIR_RELOAD+FIFO_WR_ADDR] = phys_addr;
-        control_regs[OFFSET_FIR_RELOAD+FIFO_WR_SIZE] = 11 * sizeof(long long int);
+        control_regs[OFFSET_FIR_RELOAD+FIFO_WR_SIZE] = 16 * sizeof(long long int);
         read(fd,0,0);
-        samples[11] = 0;
-        control_regs[OFFSET_FIR_CONFIG+FIFO_WR_ADDR] = phys_addr + 11 * sizeof(long long int);
-        control_regs[OFFSET_FIR_CONFIG+FIFO_WR_SIZE] = 1 * sizeof(long long int);
-	// BUG: The read below causes the program to freeze. The freeze occurs due to the kernel driver 
-	//      waiting for an interrupt that never comes (or possibly comes early) after calling 
-	//      wait_event_interruptible() in the read() handler. This problem does not occur with the
-	//      other read calls in this program, so perhaps it has to do with fact that this AXI
-	//      transfer is only one 64-bit message long?
-	// read(fd,0,0);
 
         // Send impulse
-        samples[0] = 1 << 5;
+        samples[0] = 1 << 16;
         for (i = 1; i < 32; i++)
         {
             samples[i] = 0;
@@ -271,7 +260,6 @@ int main()
         number_of_samples = 32 * sizeof(long long int);
         control_regs[OFFSET_S2H+FIFO_WR_ADDR] = phys_addr + number_of_samples;
         control_regs[OFFSET_S2H+FIFO_WR_SIZE] = number_of_samples;
-        read(fd,0,0);
         control_regs[OFFSET_H2S+FIFO_WR_ADDR] = phys_addr;
         control_regs[OFFSET_H2S+FIFO_WR_SIZE] = number_of_samples;
         read(fd,0,0);
@@ -279,33 +267,32 @@ int main()
         // Read all status FIFOs
         control_regs[OFFSET_H2S+FIFO_WR_STS_RDY] = 0;
         control_regs[OFFSET_S2H+FIFO_WR_STS_RDY] = 0;
-        control_regs[OFFSET_FIR_CONFIG+FIFO_WR_STS_RDY] = 0;
         control_regs[OFFSET_FIR_RELOAD+FIFO_WR_STS_RDY] = 0;
 
         // Verify impulse response
-        for (i = 32; i < 42; i++)
+        for (i = 32; i < 48; i++)
         {
             if (samples[i] != coefficients[i-32])
             {
                 num_errors++;
             }
         }
-        for (i = 42; i < 53; i++)
+        for (i = 48; i < 63; i++)
         {
-            if (samples[i] != coefficients[42-i+10])
+            if (samples[i] != coefficients[62-i])
             {
                 num_errors++;
             }
         }
         if (num_errors > 0)
         {
-            for (i = 32; i < 42; i++)
+            for (i = 32; i < 48; i++)
             {
-                printf("samples[%2d]: %3lld\t\tExpected: %lld\n",i,samples[i],coefficients[i-32]);
+                printf("samples[%2d]: %5lld\t\tExpected: %5lld\n",i,samples[i],coefficients[i-32]);
             }
-            for (i = 42; i < 53; i++)
+            for (i = 48; i < 63; i++)
             {
-                printf("samples[%2d]: %3lld\t\tExpected: %lld\n",i,samples[i],coefficients[42-i+10]);
+                printf("samples[%2d]: %5lld\t\tExpected: %5lld\n",i,samples[i],coefficients[62-i]);
             }
             printf("Status FIFO Word Count: \t%d\n",control_regs[FIFO_RD_STATUS_CNT]);
             printf("Address FIFO Word Count: \t%d\n",control_regs[FIFO_RD_ADDR_CNT]);
